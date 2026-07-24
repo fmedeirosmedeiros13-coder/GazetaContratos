@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GazetaContratos — Notas sem contrato</title>
+<meta name="theme-color" content="#0f2242" />
+<meta name="description" content="Detector de notas fiscais acima do limite sem contrato — Rede Gazeta" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<link rel="manifest" href="./manifest.json" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<link rel="icon" type="image/png" href="./icon-192.png" />
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --navy:#0f2242; --navy2:#16305c; --navy3:#1f3f76;
+    --gold:#c9a227; --gold-soft:#e7c95a;
+    --teal:#2f7d7b;
+    --bg:#f4f6fa; --card:#ffffff; --line:#e2e7f0;
+    --ink:#1a2536; --muted:#6b7896;
+    --danger:#b3261e; --danger-bg:#fdecea; --danger-line:#f3b7b2;
+    --ok:#1f7a4d; --ok-bg:#eaf6ef;
+    --warn:#8a5a00; --warn-bg:#fdf3df; --warn-line:#f0dca0;
+    --radius:12px;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+    --sans:"Segoe UI",Roboto,-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45}
+  a{color:var(--navy3)}
+  .wrap{max-width:1240px;margin:0 auto;padding:0 20px 60px}
+
+  header.app{
+    background:linear-gradient(105deg,var(--navy) 0%,var(--navy2) 60%,var(--navy3) 100%);
+    color:#fff;border-bottom:3px solid var(--gold);
+  }
+  header.app .inner{max-width:1240px;margin:0 auto;padding:18px 20px;display:flex;align-items:center;gap:16px}
+  .mark{width:38px;height:38px;border-radius:9px;background:var(--gold);
+    display:flex;align-items:center;justify-content:center;color:var(--navy);
+    font-weight:800;font-size:19px;flex:none;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  header.app h1{font-size:19px;margin:0;letter-spacing:.3px;font-weight:700}
+  header.app p{margin:2px 0 0;font-size:12.5px;color:#c7d2e8}
+
+  .tabs{display:flex;gap:4px;margin:18px 0 20px;border-bottom:1px solid var(--line)}
+  .tab{padding:10px 18px;border:none;background:none;font:inherit;font-weight:600;color:var(--muted);
+    cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-1px}
+  .tab.active{color:var(--navy);border-bottom-color:var(--gold)}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:18px}
+  .card h2{font-size:15px;margin:0 0 14px;color:var(--navy);font-weight:700}
+  .card h2 .hint{font-weight:400;color:var(--muted);font-size:12.5px;margin-left:8px}
+
+  .drops{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}
+  @media(max-width:760px){.drops{grid-template-columns:1fr}}
+  .drop{border:2px dashed var(--line);border-radius:10px;padding:22px 16px;text-align:center;
+    cursor:pointer;transition:.15s;background:#fbfcfe}
+  .drop:hover,.drop.over{border-color:var(--gold);background:#fffdf3}
+  .drop .big{font-size:14px;font-weight:600;color:var(--navy)}
+  .drop .sml{font-size:12px;color:var(--muted);margin-top:4px}
+  .drop .cnt{margin-top:8px;font-size:12px;color:var(--teal);font-weight:600}
+
+  .controls{display:flex;flex-wrap:wrap;align-items:end;gap:14px;margin-top:16px}
+  .field label{display:block;font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+  .field input,.field textarea{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;background:#fff;color:var(--ink)}
+  .field input:focus,.field textarea:focus{outline:none;border-color:var(--navy3);box-shadow:0 0 0 3px rgba(31,63,118,.12)}
+
+  .btn{border:none;border-radius:8px;padding:9px 18px;font:inherit;font-weight:700;cursor:pointer;transition:.12s}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.primary{background:var(--navy);color:#fff}
+  .btn.primary:hover:not(:disabled){background:var(--navy2)}
+  .btn.gold{background:var(--gold);color:var(--navy)}
+  .btn.gold:hover:not(:disabled){background:var(--gold-soft)}
+  .btn.ghost{background:#fff;color:var(--navy);border:1px solid var(--line)}
+  .btn.ghost:hover:not(:disabled){border-color:var(--navy3)}
+  .btn.mini{padding:5px 10px;font-size:12px;font-weight:600}
+  .btn.link{background:none;border:none;color:var(--navy3);text-decoration:underline;padding:0;cursor:pointer;font:inherit}
+  .btn.danger{background:none;color:var(--danger);border:1px solid var(--danger-line)}
+
+  .summary{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+  .stat{flex:1;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .k{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;font-weight:600}
+  .stat .v{font-size:22px;font-weight:800;margin-top:2px;color:var(--navy)}
+  .stat.alert{background:var(--danger-bg);border-color:var(--danger-line)}
+  .stat.alert .v{color:var(--danger)}
+
+  .filters{display:flex;gap:8px;margin:6px 0 12px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:6px 14px;font-size:12.5px;
+    font-weight:600;color:var(--muted);cursor:pointer}
+  .chip.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  thead th{background:var(--navy);color:#fff;text-align:left;padding:9px 11px;font-weight:600;font-size:11.5px;
+    text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;position:sticky;top:0}
+  tbody td{padding:9px 11px;border-top:1px solid var(--line);vertical-align:top}
+  tbody tr:nth-child(even){background:#fafbfe}
+  tr.miss{background:var(--danger-bg)!important}
+  tr.miss td{border-top-color:var(--danger-line)}
+  .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .forn{font-weight:600;color:var(--navy)}
+  .cod,.cnpj{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .desc{max-width:280px;color:#42506b}
+
+  .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+  .badge.miss{background:var(--danger);color:#fff}
+  .badge.ok{background:var(--ok-bg);color:var(--ok);border:1px solid #b7dcc6}
+  .badge.low{background:#eef1f7;color:var(--muted)}
+  .badge.warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
+  .badge.exc{background:#e6f2f1;color:var(--teal);border:1px solid #bcdedd}
+  tr.exc{background:#f2f9f8!important}
+  tr.exc td{border-top-color:#d4e9e7}
+  .tipo{display:inline-block;padding:2px 7px;border-radius:6px;font-size:11px;font-weight:600;background:#eef1f7;color:var(--navy2)}
+
+  .val-edit{width:110px;border:1px solid var(--warn-line);border-radius:6px;padding:5px 7px;font:inherit;text-align:right;background:#fff}
+
+  .empty{text-align:center;color:var(--muted);padding:40px 20px}
+  .empty .em{font-size:40px;opacity:.5}
+
+  .reg-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line)}
+  .reg-row:first-child{border-top:none}
+  .reg-main{flex:1;min-width:0}
+  .reg-main .rn{font-weight:600;color:var(--navy)}
+  .reg-main .rc{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .reg-file{font-size:12px}
+
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;
+    padding:11px 20px;border-radius:10px;font-weight:600;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.3);z-index:50}
+  .inline-add{display:inline-flex;gap:6px;align-items:center}
+  .footnote{color:var(--muted);font-size:12px;margin-top:10px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ============================ Utils ============================ */
+const TOMADOR_CNPJ = "27063726"; // A Gazeta (destinatário) — sempre ignorado como emitente
+const LIMITE_PADRAO = 10000;
+
+function onlyDigits(s){ return (s||"").replace(/\D/g,""); }
+
+function normName(s){
+  return (s||"").toUpperCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
+}
+
+function fmtBRL(n){
+  if(n===null||n===undefined||isNaN(n)) return "—";
+  return n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+}
+
+function fmtCNPJ(d){
+  d = onlyDigits(d);
+  if(d.length===14) return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/,"$1.$2.$3/$4-$5");
+  if(d.length===11) return d.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/,"$1.$2.$3-$4");
+  return d;
+}
+
+// Converte string de valor BR/US p/ número, decidindo o decimal pelo último separador
+function toNumber(s){
+  if(!s) return null;
+  s = s.trim();
+  const lastComma = s.lastIndexOf(","), lastDot = s.lastIndexOf(".");
+  if(lastComma > lastDot){ s = s.replace(/\./g,"").replace(",","."); }
+  else { s = s.replace(/,/g,""); }
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+/* ------- Nome do arquivo: DATA - COD - NOME - Nº NOTA ------- */
+function parseFilename(fname){
+  let base = fname.replace(/\.pdf$/i,"").replace(/_/g," ");
+  let data = "";
+  const md = base.match(/^\s*(\d{2})[-/ ](\d{2})[-/ ](\d{4})/);
+  if(md){ data = md[1]+"/"+md[2]+"/"+md[3]; base = base.slice(md[0].length); }
+  const parts = base.split(/\s*-\s*/).map(p=>p.trim()).filter(Boolean);
+  let cod="", nome="", num="";
+  if(parts.length>=1) cod = onlyDigits(parts[0]);
+  if(parts.length>=2) num = onlyDigits(parts[parts.length-1]);
+  if(parts.length>=3) nome = parts.slice(1,-1).join(" ").trim();
+  else if(parts.length===2) nome = parts[1];
+  return { data, codFornecedor:cod, nomeFornecedor:nome, numeroNota:num };
+}
+
+/* ------- Texto do PDF via pdf.js ------- */
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+async function extractText(file){
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+  let out = [];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    out.push(tc.items.map(it=>it.str).join(" "));
+  }
+  return out.join("\n");
+}
+
+/* ------- Tipo de documento ------- */
+function detectTipo(t){
+  const u = t.toUpperCase();
+  if(/NFS-?E|DANFSE|PRESTADOR DE SERVI|NOTA FISCAL.*SERVI/.test(u)) return "NFS-e";
+  if(/DANFE|NOTA FISCAL ELETR/.test(u)) return "NF-e";
+  if(/\bRECIBO\b/.test(u)) return "Recibo";
+  return "Documento";
+}
+
+/* ------- CNPJ do prestador/emitente ------- */
+function parseCNPJ(t){
+  // 1) chave NFS-e nacional (50 díg): CNPJ do prestador em posição fixa (9..22)
+  let ch = t.match(/\d{50}/);
+  if(ch){ const c = ch[0].slice(9,23); if(/^\d{14}$/.test(c)) return c; }
+  // 2) chave NF-e/NFC-e (44 díg, agrupada ou contígua): CNPJ do emitente nas posições 7..20
+  ch = t.match(/(?:\d{4}[ .\-]?){10}\d{4}/) || t.match(/\d{44}/);
+  if(ch){ const d = onlyDigits(ch[0]); if(d.length>=20) return d.slice(6,20); }
+  // 3) CNPJ impresso do prestador: antes do marcador TOMADOR
+  const ti = (t.search(/TOMADOR/i)+1) || t.length;
+  const fmt = /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/g; let m;
+  while((m=fmt.exec(t))){ if(m.index < ti) return onlyDigits(m[0]); }
+  // 4) qualquer CNPJ formatado, senão 14 dígitos isolados
+  m = t.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/); if(m) return onlyDigits(m[0]);
+  const b = t.match(/(?<!\d)\d{14}(?!\d)/); return b ? b[0] : "";
+}
+
+/* ------- Valor total (produto = valor da nota; serviço = valor do serviço) ------- */
+function parseValor(t){
+  const N = "([\\d]{1,3}(?:[.\\s]\\d{3})*[.,]\\d{2}|\\d+[.,]\\d{2})";
+  const tryPat = (pat)=>{ const m=t.match(new RegExp(pat,"i")); return m?toNumber(m[1]):null; };
+  const labels = [
+    "VALOR TOTAL[:\\s]+R?\\$?\\s*"+N,                 // cabeçalho DANFE
+    "VALOR SERVI[ÇC]O[^\\d]{0,40}?"+N,                // NFS-e prefeitura
+    "VALOR DOS SERVI[ÇC]OS?[^\\d]{0,20}?"+N,          // NFS-e eNotas
+    "Vl\\.? do Servi[çc]o[^\\d]{0,20}?"+N,            // NFS-e Governo DF
+    "Valor do Servi[çc]o[^\\d]{0,25}?"+N,             // DANFSe nacional
+    "VALOR TOTAL DA NOTA(?!\\s*FISCAL)[^\\d]{0,40}?"+N, // DANFE (backup)
+    "VALOR TOTAL DO SERVI\\w+[^\\d]{0,40}?"+N
+  ];
+  for(const lb of labels){ const v=tryPat(lb); if(v!==null) return v; }
+  // recibo / doc simples: "VALOR 7.401,81", "R$ 7.401,81" ou "7.401,81 R$" — maior valor monetário
+  const money=[]; let m;
+  const reMoney = new RegExp("R\\$\\s*"+N+"|"+N+"\\s*R\\$","gi");
+  while((m=reMoney.exec(t))){ const n=toNumber(m[1]||m[2]); if(n!==null) money.push(n); }
+  if(money.length) return Math.max.apply(null, money);
+  const v=tryPat("VALOR[^\\d]{0,15}?"+N); if(v!==null) return v;
+  return null;
+}
+
+/* ------- Razões sociais na ordem do documento (prestador vem primeiro) ------- */
+function nomesDocumento(t){
+  const re = /(?:Nome\s*\/\s*Raz[ãa]o Social|Raz[ãa]o Social|NOME\s*\/\s*RAZ[ÃA]O SOCIAL|Nome\s*\/\s*Nome Empresarial)[:\s]*([A-Z0-9][^\n]{2,70})/gi;
+  const out=[]; let m;
+  while((m=re.exec(t))){ const n=m[1].trim(); if(!/^(Inscri|CNPJ|CPF|E-?mail|Endere|Munic|Tel)/i.test(n)) out.push(n); }
+  return out;
+}
+
+/* ------- Fornecedor a partir do nome do arquivo (2 convenções) ------- */
+function fornecedorDoArquivo(fname){
+  let b = fname.replace(/\.pdf$/i,"").replace(/_/g," ");
+  const md = b.match(/^\s*\d{2}[-/ ]\d{2}[-/ ]\d{4}/); if(md) b = b.slice(md[0].length);
+  const parts = b.split(/\s*-\s*/).map(x=>x.trim()).filter(Boolean);
+  if(!parts.length) return "";
+  const firstNum = /^[\d ]+$/.test(parts[0]);
+  if(firstNum && parts.length>=3) return parts.slice(1,-1).join(" ").trim();  // produto: DATA-COD-NOME-Nº
+  const tk = parts[0].replace(/\bNF\b.*/i,"").trim();                          // serviço: FORNECEDOR-...-NF Nº
+  return /^[\d ]+$/.test(tk) ? "" : tk;
+}
+
+/* ------- Empresa tomadora (uma das 11 do grupo) ------- */
+const MAP_EMPRESA = {
+  SA:"S.A. A Gazeta", SAA:"S.A. A Gazeta", CIDADA:"Rádio Cidadã", "CIDADÃ":"Rádio Cidadã",
+  DIFUS:"Difusora", DIFUSORA:"Difusora", VIDEO:"Vídeo Express", "VÍDEO":"Vídeo Express",
+  TVN:"Sistema Norte (TVN)", FM102:"Rádio FM 102", "FM 102":"Rádio FM 102"
+};
+function empresaTomadora(nomes, tipo, isENotas, fname){
+  // 1) do conteúdo: prestador é o 1º nome; tomador é o 2º (ou o único, em eNotas)
+  let t = tipo==="NFS-e" ? (isENotas ? (nomes[0]||"") : (nomes[1]||"")) : (nomes[0]||"");
+  if(t) return t;
+  // 2) fallback: sigla no token do meio do nome do arquivo (ex.: "MILE - VIDEO 8577 - NF 887")
+  const b = fname.replace(/\.pdf$/i,"").replace(/_/g," ");
+  const parts = b.split(/\s*-\s*/).map(x=>x.trim()).filter(Boolean);
+  if(parts.length>=3){
+    const sig = parts[1].replace(/\d+/g,"").trim().toUpperCase();
+    if(sig) return MAP_EMPRESA[sig] || sig;
+  }
+  return "";
+}
+
+/* ------- Descrição ------- */
+function parseDescricao(t, tipo){
+  let m;
+  if(tipo==="NFS-e"){
+    m = t.match(/Descri[çc][ãa]o do Servi[çc]o\s*([^\n]{3,140})/i); if(m && !/^\s*-/.test(m[1])) return m[1].trim();
+    m = t.match(/DISCRIMINA[ÇC][ÃA]O D[OE]S? SERVI[ÇC]OS?\s+([^\n]{3,140})/i); if(m) return m[1].trim();
+    m = t.match(/\b(1[0-9]\.\d{2}(?:\.\d{2})?\s*[-–]\s*[^\n]{4,90})/); if(m) return m[1].trim();
+  }
+  m = t.match(/DESCRI[ÇC][ÃA]O DO PRODUTO[^\n]*\n?\s*([A-Za-zÀ-ú][^\n]{4,120})/i); if(m) return m[1].trim();
+  m = t.match(/RECEBEMOS DE\s+(.{4,80}?)\s+OS PRODUTOS/i); if(m) return "Fornec.: "+m[1].trim();
+  return "";
+}
+
+async function parseNota(file){
+  const meta = parseFilename(file.name);
+  let text = "";
+  try{ text = await extractText(file); }catch(e){ text=""; }
+  const clean = (text||"").replace(/[ \t]+/g," ");
+  const tipo = detectTipo(clean);
+  const valor = parseValor(clean);
+  const cnpj = parseCNPJ(clean);
+  const desc = parseDescricao(clean, tipo);
+  const nomes = nomesDocumento(clean);
+  const isENotas = /eNotas/i.test(clean);
+  const fnForn = fornecedorDoArquivo(file.name);
+  // NFS-e (menos eNotas): razão social do prestador (conteúdo) é a fonte boa; senão nome do arquivo
+  let nome;
+  if(tipo==="NFS-e" && !isENotas) nome = nomes[0] || fnForn || (cnpj?fmtCNPJ(cnpj):"");
+  else nome = fnForn || nomes[0] || (cnpj?fmtCNPJ(cnpj):"");
+  const legivel = clean.trim().length > 200 && valor!==null;
+  return {
+    id: file.name+"|"+file.size,
+    arquivo:file.name,
+    ...meta,
+    nomeFornecedor: nome || meta.nomeFornecedor,
+    tomador: empresaTomadora(nomes, tipo, isENotas, file.name),
+    tipo, cnpj, valor,
+    valorManual:false,
+    descricao:desc,
+    legivel,
+  };
+}
+
+async function detectContrato(file){
+  // usado p/ contratos anexados na leva: identifica fornecedor pelo nome do arquivo + CNPJ do texto
+  const meta = parseFilename(file.name);
+  let text=""; try{ text=await extractText(file); }catch(e){}
+  const cnpj = parseCNPJ((text||"").replace(/[ \t]+/g," "));
+  return { arquivo:file.name, cnpj, nome:meta.nomeFornecedor, cod:meta.codFornecedor, blob:file };
+}
+
+/* ============================ IndexedDB ============================ */
+const DB_NAME="gazeta-contratos", STORE="contratos";
+function openDB(){
+  return new Promise((res,rej)=>{
+    const r = indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded = ()=>{ r.result.createObjectStore(STORE,{keyPath:"cnpj"}); };
+    r.onsuccess = ()=>res(r.result);
+    r.onerror = ()=>rej(r.error);
+  });
+}
+async function dbAll(){
+  const db=await openDB();
+  return new Promise((res,rej)=>{
+    const rq=db.transaction(STORE).objectStore(STORE).getAll();
+    rq.onsuccess=()=>res(rq.result||[]); rq.onerror=()=>rej(rq.error);
+  });
+}
+async function dbPut(rec){
+  const db=await openDB();
+  return new Promise((res,rej)=>{
+    const rq=db.transaction(STORE,"readwrite").objectStore(STORE).put(rec);
+    rq.onsuccess=()=>res(true); rq.onerror=()=>rej(rq.error);
+  });
+}
+async function dbDel(cnpj){
+  const db=await openDB();
+  return new Promise((res,rej)=>{
+    const rq=db.transaction(STORE,"readwrite").objectStore(STORE).delete(cnpj);
+    rq.onsuccess=()=>res(true); rq.onerror=()=>rej(rq.error);
+  });
+}
+
+/* ============================ App ============================ */
+function App(){
+  const [tab,setTab] = useState("conf");
+  const [registry,setRegistry] = useState([]);   // cadastro salvo (IndexedDB)
+  const [notas,setNotas] = useState([]);          // notas da leva atual
+  const [lote,setLote] = useState([]);            // contratos anexados na leva
+  const [limite,setLimite] = useState(LIMITE_PADRAO);
+  const [filtro,setFiltro] = useState("todas");
+  const [busy,setBusy] = useState(false);
+  const [toast,setToast] = useState("");
+
+  const reload = useCallback(async()=>{ setRegistry(await dbAll()); },[]);
+  useEffect(()=>{ reload(); },[reload]);
+
+  function flash(msg){ setToast(msg); setTimeout(()=>setToast(""),2600); }
+
+  // índices por CNPJ (forte) e por razão social normalizada; exceção é separada do contrato
+  const regByCnpj = {}, regByName = {}, excByCnpj = {}, excByName = {};
+  registry.forEach(r=>{
+    const dc=onlyDigits(r.cnpj), nn=normName(r.razaoSocial);
+    if(r.excecao){ if(dc) excByCnpj[dc]=r; if(nn) excByName[nn]=r; }
+    else { if(dc) regByCnpj[dc]=r; if(nn) regByName[nn]=r; }
+  });
+  const loteByCnpj = {}, loteByName = {};
+  lote.forEach(c=>{ if(c.cnpj) loteByCnpj[onlyDigits(c.cnpj)]=c; if(c.nome) loteByName[normName(c.nome)]=c; });
+
+  function statusNota(n){
+    const v = n.valor;
+    if(v===null || isNaN(v)) return {code:"ileg", label:"Ilegível", tone:"warn"};
+    if(v <= limite) return {code:"low", label:"Abaixo do limite", tone:"low"};
+    const cnpj = onlyDigits(n.cnpj);
+    const nm = normName(n.nomeFornecedor);
+    if((cnpj && excByCnpj[cnpj]) || (nm && excByName[nm])) return {code:"exc", label:"Exceção", tone:"exc"};
+    if((cnpj && (regByCnpj[cnpj]||loteByCnpj[cnpj])) || (nm && (regByName[nm]||loteByName[nm]))) return {code:"ok", label:"Contrato OK", tone:"ok"};
+    return {code:"miss", label:"FALTA CONTRATO", tone:"miss"};
+  }
+
+  const enriched = notas.map(n=>({ ...n, _st:statusNota(n) }));
+  const missing = enriched.filter(n=>n._st.code==="miss");
+  const excecoes = enriched.filter(n=>n._st.code==="exc");
+  const somaMiss = missing.reduce((s,n)=>s+(n.valor||0),0);
+  const shown = filtro==="miss" ? missing : (filtro==="exc" ? excecoes : enriched);
+
+  async function onNotas(files){
+    setBusy(true);
+    const arr = [];
+    for(const f of files){ arr.push(await parseNota(f)); }
+    setNotas(prev=>{
+      const seen = new Set(prev.map(p=>p.id));
+      return [...prev, ...arr.filter(a=>!seen.has(a.id))];
+    });
+    setBusy(false);
+    flash(arr.length+" nota(s) lida(s)");
+  }
+  async function onContratos(files){
+    setBusy(true);
+    const arr=[];
+    for(const f of files){ arr.push(await detectContrato(f)); }
+    setLote(prev=>[...prev,...arr]);
+    setBusy(false);
+    flash(arr.length+" contrato(s) anexado(s) à leva");
+  }
+
+  function setValorManual(id,v){
+    const n = toNumber(v);
+    setNotas(prev=>prev.map(x=>x.id===id?{...x,valor:(n===null?x.valor:n),valorManual:true,legivel:true}:x));
+  }
+
+  async function salvarNoCadastro(n){
+    const contrato = lote.find(c=>onlyDigits(c.cnpj)===onlyDigits(n.cnpj) || normName(c.nome)===normName(n.nomeFornecedor));
+    const rec = {
+      cnpj: onlyDigits(n.cnpj) || ("SEMCNPJ-"+normName(n.nomeFornecedor)),
+      razaoSocial: n.nomeFornecedor || (contrato&&contrato.nome) || "",
+      arquivoNome: contrato ? contrato.arquivo : "",
+      blob: contrato ? contrato.blob : null,
+      vigencia:"", obs:"Salvo a partir da conferência", criadoEm:Date.now()
+    };
+    await dbPut(rec); await reload();
+    flash("Contrato de "+(rec.razaoSocial||rec.cnpj)+" salvo no cadastro");
+  }
+
+  async function marcarExcecao(n){
+    const key = onlyDigits(n.cnpj) || ("SEMCNPJ-"+normName(n.nomeFornecedor));
+    const ex = registry.find(r=>r.cnpj===key) || {};
+    const rec = {
+      ...ex, cnpj:key,
+      razaoSocial: n.nomeFornecedor || ex.razaoSocial || "",
+      excecao:true, motivoExcecao: ex.motivoExcecao || "Marcado na conferência",
+      arquivoNome: ex.arquivoNome || "", blob: ex.blob || null,
+      vigencia: ex.vigencia || "", obs: ex.obs || "", criadoEm: ex.criadoEm || Date.now()
+    };
+    await dbPut(rec); await reload();
+    flash((rec.razaoSocial||rec.cnpj)+" marcado como exceção");
+  }
+
+  function exportarCSV(){
+    const head = ["Data","Codigo","Fornecedor","Empresa","CNPJ","Tipo","Numero","Descricao","Valor","Status"];
+    const rows = enriched.map(n=>[
+      n.data, n.codFornecedor, n.nomeFornecedor, n.tomador, fmtCNPJ(n.cnpj), n.tipo, n.numeroNota,
+      (n.descricao||"").replace(/;/g,","), (n.valor!==null?n.valor.toFixed(2).replace(".",","):""), n._st.label
+    ]);
+    const csv = [head, ...rows].map(r=>r.map(c=>'"'+String(c==null?"":c).replace(/"/g,'""')+'"').join(";")).join("\n");
+    const blob = new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download="falta-contrato_"+new Date().toISOString().slice(0,10)+".csv"; a.click();
+  }
+
+  function limparLeva(){ setNotas([]); setLote([]); setFiltro("todas"); }
+
+  return (
+    <div>
+      <header className="app">
+        <div className="inner">
+          <div className="mark">GC</div>
+          <div>
+            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.0</span></h1>
+            <p>Notas fiscais acima do limite que estão sem contrato</p>
+          </div>
+        </div>
+      </header>
+
+      <div className="wrap">
+        <div className="tabs">
+          <button className={"tab"+(tab==="conf"?" active":"")} onClick={()=>setTab("conf")}>Conferência</button>
+          <button className={"tab"+(tab==="cad"?" active":"")} onClick={()=>setTab("cad")}>
+            Cadastro de contratos {registry.length>0 && <span style={{opacity:.7}}>({registry.length})</span>}
+          </button>
+        </div>
+
+        {tab==="conf" && (
+          <Conferencia
+            notas={enriched} shown={shown} missing={missing} excecoes={excecoes} somaMiss={somaMiss}
+            lote={lote} limite={limite} setLimite={setLimite}
+            filtro={filtro} setFiltro={setFiltro} busy={busy}
+            onNotas={onNotas} onContratos={onContratos}
+            setValorManual={setValorManual} salvarNoCadastro={salvarNoCadastro} marcarExcecao={marcarExcecao}
+            regByCnpj={regByCnpj} regByName={regByName} excByCnpj={excByCnpj} excByName={excByName}
+            exportarCSV={exportarCSV} limparLeva={limparLeva}
+          />
+        )}
+
+        {tab==="cad" && (
+          <Cadastro registry={registry} reload={reload} flash={flash} />
+        )}
+      </div>
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+/* ---------------------- Conferência ---------------------- */
+function DropZone({title,hint,count,onFiles,accept}){
+  const ref=useRef(); const [over,setOver]=useState(false);
+  return (
+    <div className={"drop"+(over?" over":"")}
+      onClick={()=>ref.current.click()}
+      onDragOver={e=>{e.preventDefault();setOver(true);}}
+      onDragLeave={()=>setOver(false)}
+      onDrop={e=>{e.preventDefault();setOver(false);onFiles([...e.dataTransfer.files].filter(f=>/\.pdf$/i.test(f.name)));}}>
+      <div className="big">{title}</div>
+      <div className="sml">{hint}</div>
+      {count>0 && <div className="cnt">{count} arquivo(s) nesta leva</div>}
+      <input ref={ref} type="file" accept="application/pdf" multiple style={{display:"none"}}
+        onChange={e=>{onFiles([...e.target.files]); e.target.value="";}} />
+    </div>
+  );
+}
+
+function Conferencia(props){
+  const {notas,shown,missing,excecoes,somaMiss,lote,limite,setLimite,filtro,setFiltro,busy,
+    onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
+
+  return (
+    <div>
+      <div className="card">
+        <h2>1. Envie os PDFs desta leva</h2>
+        <div className="drops">
+          <DropZone title="Notas fiscais (PDF)" hint="Arraste ou clique — pode selecionar várias"
+            count={notas.length} onFiles={onNotas} />
+          <DropZone title="Contratos desta leva (opcional)" hint="Só se ainda não estiverem no cadastro"
+            count={lote.length} onFiles={onContratos} />
+        </div>
+        <div className="controls">
+          <div className="field">
+            <label>Limite (R$)</label>
+            <input type="number" value={limite} min="0" step="500"
+              onChange={e=>setLimite(Number(e.target.value)||0)} style={{width:130}} />
+          </div>
+          <div style={{flex:1}}></div>
+          {notas.length>0 && <button className="btn ghost" onClick={limparLeva}>Limpar leva</button>}
+          {busy && <span style={{color:"var(--teal)",fontWeight:600}}>Lendo PDFs…</span>}
+        </div>
+        <div className="footnote">
+          O nome do arquivo dá fornecedor, código e nº da nota; o conteúdo dá CNPJ, valor e descrição.
+          Uma nota só é apontada como falta de contrato se o fornecedor não estiver nem no cadastro nem anexado nesta leva.
+        </div>
+      </div>
+
+      {notas.length>0 && (
+        <div>
+          <div className="summary">
+            <div className="stat"><div className="k">Notas na leva</div><div className="v">{notas.length}</div></div>
+            <div className="stat"><div className="k">Acima do limite</div>
+              <div className="v">{notas.filter(n=>n._st.code!=="low"&&n._st.code!=="ileg").length}</div></div>
+            <div className="stat alert"><div className="k">Falta contrato</div><div className="v">{missing.length}</div></div>
+            <div className="stat"><div className="k">Exceções</div><div className="v" style={{color:"var(--teal)"}}>{excecoes.length}</div></div>
+            <div className="stat alert"><div className="k">Soma sem contrato</div><div className="v" style={{fontSize:18}}>{fmtBRL(somaMiss)}</div></div>
+          </div>
+
+          <div className="filters">
+            <button className={"chip"+(filtro==="todas"?" active":"")} onClick={()=>setFiltro("todas")}>Todas ({notas.length})</button>
+            <button className={"chip"+(filtro==="miss"?" active":"")} onClick={()=>setFiltro("miss")}>Só falta contrato ({missing.length})</button>
+            <button className={"chip"+(filtro==="exc"?" active":"")} onClick={()=>setFiltro("exc")}>Só exceções ({excecoes.length})</button>
+            <div style={{flex:1}}></div>
+            <button className="btn gold mini" onClick={exportarCSV}>Exportar CSV</button>
+          </div>
+
+          <div className="tablewrap">
+            <table>
+              <thead><tr>
+                <th>Data</th><th>Fornecedor</th><th>Empresa</th><th>CNPJ</th><th>Tipo</th><th>Nº</th>
+                <th>Descrição</th><th className="num">Valor</th><th>Status</th><th></th>
+              </tr></thead>
+              <tbody>
+                {shown.map(n=>{
+                  const st=n._st;
+                  const cnpj=onlyDigits(n.cnpj);
+                  const noCad = !(regByCnpj[cnpj]||regByName[normName(n.nomeFornecedor)]);
+                  const temNoLote = lote.some(c=>onlyDigits(c.cnpj)===cnpj || normName(c.nome)===normName(n.nomeFornecedor));
+                  return (
+                    <tr key={n.id} className={st.code==="miss"?"miss":(st.code==="exc"?"exc":"")}>
+                      <td className="num">{n.data||"—"}</td>
+                      <td><div className="forn">{n.nomeFornecedor||"—"}</div>
+                        {n.codFornecedor && <div className="cod">cód {n.codFornecedor}</div>}</td>
+                      <td style={{color:"var(--navy2)",fontSize:12,fontWeight:600,whiteSpace:"nowrap"}}>{n.tomador||"—"}</td>
+                      <td className="cnpj">{n.cnpj?fmtCNPJ(n.cnpj):"—"}</td>
+                      <td><span className="tipo">{n.tipo}</span></td>
+                      <td className="cod">{n.numeroNota||"—"}</td>
+                      <td className="desc">{n.descricao||"—"}</td>
+                      <td className="num">
+                        {st.code==="ileg"
+                          ? <input className="val-edit" placeholder="digite" defaultValue=""
+                              onBlur={e=>e.target.value&&setValorManual(n.id,e.target.value)} />
+                          : <span>{fmtBRL(n.valor)}{n.valorManual&&<span title="valor digitado" style={{color:"var(--warn)"}}> ✎</span>}</span>}
+                      </td>
+                      <td>
+                        <span className={"badge "+(st.tone)}>{st.label}</span>
+                        {st.code==="ileg" && <div className="footnote" style={{marginTop:4}}>Salve como PDF digital ou digite o valor</div>}
+                      </td>
+                      <td>
+                        {st.code==="ok" && temNoLote && noCad &&
+                          <button className="btn link" onClick={()=>salvarNoCadastro(n)}>Salvar no cadastro</button>}
+                        {st.code==="miss" &&
+                          <button className="btn link" onClick={()=>marcarExcecao(n)}>Marcar exceção</button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {notas.length===0 && (
+        <div className="card"><div className="empty">
+          <div className="em">📄</div>
+          <p>Envie as notas da leva para começar a conferência.</p>
+        </div></div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------- Cadastro ---------------------- */
+function Cadastro({registry,reload,flash}){
+  const [cnpj,setCnpj]=useState(""); const [razao,setRazao]=useState("");
+  const [vig,setVig]=useState(""); const [obs,setObs]=useState("");
+  const [file,setFile]=useState(null); const fileRef=useRef();
+  const [exc,setExc]=useState(false); const [motivo,setMotivo]=useState("");
+  const [q,setQ]=useState("");
+
+  async function add(){
+    const d=onlyDigits(cnpj);
+    if(!d || d.length<11){ flash("Informe um CNPJ válido"); return; }
+    if(!razao.trim()){ flash("Informe a razão social"); return; }
+    await dbPut({cnpj:d, razaoSocial:razao.trim(), arquivoNome:file?file.name:"", blob:file||null,
+      vigencia:vig, obs:obs, excecao:exc, motivoExcecao:(exc?(motivo.trim()||"Não exige contrato"):""), criadoEm:Date.now()});
+    setCnpj("");setRazao("");setVig("");setObs("");setFile(null);setExc(false);setMotivo("");
+    if(fileRef.current) fileRef.current.value="";
+    await reload(); flash(exc?"Fornecedor cadastrado como exceção":"Contrato cadastrado");
+  }
+  async function toggleExc(c){
+    await dbPut({...c, excecao:!c.excecao, motivoExcecao:(!c.excecao?(c.motivoExcecao||"Não exige contrato"):"")});
+    await reload(); flash(!c.excecao?"Marcado como exceção":"Exceção removida");
+  }
+  async function remove(c){ if(confirm("Remover "+(c.razaoSocial||c.cnpj)+" do cadastro?")){ await dbDel(c.cnpj); await reload(); flash("Removido"); } }
+  function baixar(c){ if(!c.blob){flash("Sem arquivo anexado");return;} const u=URL.createObjectURL(c.blob); const a=document.createElement("a"); a.href=u; a.download=c.arquivoNome||"contrato.pdf"; a.click(); }
+
+  const list = registry.filter(r=> !q || normName(r.razaoSocial).includes(normName(q)) || onlyDigits(r.cnpj).includes(onlyDigits(q)) )
+    .sort((a,b)=>(a.razaoSocial||"").localeCompare(b.razaoSocial||""));
+
+  return (
+    <div>
+      <div className="card">
+        <h2>Novo fornecedor <span className="hint">contrato ou exceção — indexado por CNPJ + razão social</span></h2>
+        <div className="controls">
+          <div className="field"><label>CNPJ</label>
+            <input value={cnpj} onChange={e=>setCnpj(e.target.value)} placeholder="00.000.000/0000-00" style={{width:180}} /></div>
+          <div className="field" style={{flex:1,minWidth:220}}><label>Razão social</label>
+            <input value={razao} onChange={e=>setRazao(e.target.value)} placeholder="Nome do fornecedor" style={{width:"100%"}} /></div>
+          <div className="field"><label>Vigência (opcional)</label>
+            <input value={vig} onChange={e=>setVig(e.target.value)} placeholder="ex.: até 12/2026" style={{width:150}} /></div>
+        </div>
+        <label className="excbox" style={{display:"flex",alignItems:"center",gap:8,margin:"6px 0 2px",cursor:"pointer",fontWeight:600,color:"var(--teal)"}}>
+          <input type="checkbox" checked={exc} onChange={e=>setExc(e.target.checked)} />
+          Marcar como exceção (não exige contrato)
+        </label>
+        <div className="controls">
+          {exc
+            ? <div className="field" style={{flex:1,minWidth:220}}><label>Motivo da exceção</label>
+                <input value={motivo} onChange={e=>setMotivo(e.target.value)} placeholder="ex.: locação recorrente, órgão público, reembolso" style={{width:"100%"}} /></div>
+            : <div className="field" style={{flex:1,minWidth:220}}><label>Observação (opcional)</label>
+                <input value={obs} onChange={e=>setObs(e.target.value)} style={{width:"100%"}} /></div>}
+          {!exc &&
+            <div className="field"><label>PDF do contrato (opcional)</label>
+              <input ref={fileRef} type="file" accept="application/pdf" onChange={e=>setFile(e.target.files[0]||null)} /></div>}
+          <button className="btn primary" onClick={add}>{exc?"Cadastrar exceção":"Cadastrar contrato"}</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Fornecedores cadastrados <span className="hint">{registry.length} no total · {registry.filter(r=>r.excecao).length} exceção(ões)</span></h2>
+        {registry.length>0 &&
+          <div className="field" style={{marginBottom:10}}>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome ou CNPJ" style={{width:"100%",maxWidth:320}} />
+          </div>}
+        {list.length===0
+          ? <div className="empty"><p>Nenhum contrato cadastrado ainda. Cadastre acima, ou salve direto da conferência.</p></div>
+          : list.map(c=>(
+            <div className="reg-row" key={c.cnpj}>
+              <div className="reg-main">
+                <div className="rn">{c.razaoSocial||"(sem nome)"}
+                  {c.excecao && <span className="badge exc" style={{marginLeft:8}}>Exceção</span>}</div>
+                <div className="rc">{fmtCNPJ(c.cnpj)}
+                  {c.excecao ? (c.motivoExcecao?" · "+c.motivoExcecao:"") : (c.vigencia?" · "+c.vigencia:"")}
+                  {!c.excecao && c.obs?" · "+c.obs:""}</div>
+              </div>
+              <div className="reg-file">
+                {c.excecao
+                  ? <span style={{color:"var(--teal)",fontWeight:600}}>não exige contrato</span>
+                  : (c.arquivoNome
+                      ? <button className="btn link" onClick={()=>baixar(c)}>{c.arquivoNome}</button>
+                      : <span style={{color:"var(--muted)"}}>sem PDF</span>)}
+              </div>
+              <button className="btn ghost mini" onClick={()=>toggleExc(c)}>{c.excecao?"Tornar contrato":"Tornar exceção"}</button>
+              <button className="btn danger mini" onClick={()=>remove(c)}>Remover</button>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+<script>
+/* PWA: registra o service worker (silencioso em file://) */
+if("serviceWorker" in navigator){
+  window.addEventListener("load", function(){
+    navigator.serviceWorker.register("./sw.js").catch(function(){});
+  });
+}
+</script>
+</body>
+</html>
