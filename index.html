@@ -33,13 +33,13 @@
   html,body{margin:0;padding:0}
   body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45}
   a{color:var(--navy3)}
-  .wrap{max-width:1240px;margin:0 auto;padding:0 20px 60px}
+  .wrap{max-width:min(1760px,97vw);margin:0 auto;padding:0 20px 60px}
 
   header.app{
     background:linear-gradient(105deg,var(--navy) 0%,var(--navy2) 60%,var(--navy3) 100%);
     color:#fff;border-bottom:3px solid var(--gold);
   }
-  header.app .inner{max-width:1240px;margin:0 auto;padding:18px 20px;display:flex;align-items:center;gap:16px}
+  header.app .inner{max-width:min(1760px,97vw);margin:0 auto;padding:18px 20px;display:flex;align-items:center;gap:16px}
   .mark{width:38px;height:38px;border-radius:9px;background:var(--gold);
     display:flex;align-items:center;justify-content:center;color:var(--navy);
     font-weight:800;font-size:19px;flex:none;box-shadow:0 2px 8px rgba(0,0,0,.25)}
@@ -104,7 +104,9 @@
   .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   .forn{font-weight:600;color:var(--navy)}
   .cod,.cnpj{font-family:var(--mono);font-size:12px;color:var(--muted)}
-  .desc{max-width:280px;color:#42506b}
+  .desc{max-width:300px;color:#42506b;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .forncell{max-width:220px}
+  .forncell .forn{white-space:normal;overflow-wrap:anywhere}
 
   .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
   .badge.miss{background:var(--danger);color:#fff}
@@ -492,7 +494,7 @@ function App(){
         <div className="inner">
           <div className="mark">GC</div>
           <div>
-            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.0</span></h1>
+            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.1</span></h1>
             <p>Notas fiscais acima do limite que estão sem contrato</p>
           </div>
         </div>
@@ -610,13 +612,13 @@ function Conferencia(props){
                   return (
                     <tr key={n.id} className={st.code==="miss"?"miss":(st.code==="exc"?"exc":"")}>
                       <td className="num">{n.data||"—"}</td>
-                      <td><div className="forn">{n.nomeFornecedor||"—"}</div>
+                      <td className="forncell"><div className="forn">{n.nomeFornecedor||"—"}</div>
                         {n.codFornecedor && <div className="cod">cód {n.codFornecedor}</div>}</td>
-                      <td style={{color:"var(--navy2)",fontSize:12,fontWeight:600,whiteSpace:"nowrap"}}>{n.tomador||"—"}</td>
+                      <td style={{color:"var(--navy2)",fontSize:12,fontWeight:600,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={n.tomador||""}>{n.tomador||"—"}</td>
                       <td className="cnpj">{n.cnpj?fmtCNPJ(n.cnpj):"—"}</td>
                       <td><span className="tipo">{n.tipo}</span></td>
                       <td className="cod">{n.numeroNota||"—"}</td>
-                      <td className="desc">{n.descricao||"—"}</td>
+                      <td className="desc" title={n.descricao||""}>{n.descricao||"—"}</td>
                       <td className="num">
                         {st.code==="ileg"
                           ? <input className="val-edit" placeholder="digite" defaultValue=""
