@@ -134,6 +134,15 @@
     padding:11px 20px;border-radius:10px;font-weight:600;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.3);z-index:50}
   .inline-add{display:inline-flex;gap:6px;align-items:center}
   .footnote{color:var(--muted);font-size:12px;margin-top:10px}
+  .overlay{position:fixed;inset:0;background:rgba(10,20,40,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px}
+  .modal{background:#fff;border-radius:14px;max-width:440px;width:100%;padding:22px;box-shadow:0 18px 60px rgba(0,0,0,.4)}
+  .modal h3{margin:0 0 4px;color:var(--navy);font-size:16px}
+  .modal .msub{color:var(--muted);font-size:12.5px;margin:0 0 14px}
+  .userbtn{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;border:1px solid var(--line);
+    background:#fff;border-radius:9px;padding:10px 12px;margin-bottom:7px;cursor:pointer;font:inherit}
+  .userbtn:hover{border-color:var(--gold);background:#fffdf3}
+  .userbtn .un{font-weight:600;color:var(--navy)}
+  .userbtn .ue{font-size:12px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -329,6 +338,7 @@ async function parseNota(file){
   return {
     id: file.name+"|"+file.size,
     arquivo:file.name,
+    _file: file,
     ...meta,
     nomeFornecedor: nome || meta.nomeFornecedor,
     tomador: empresaTomadora(nomes, tipo, isENotas, file.name),
@@ -348,11 +358,15 @@ async function detectContrato(file){
 }
 
 /* ============================ IndexedDB ============================ */
-const DB_NAME="gazeta-contratos", STORE="contratos";
+const DB_NAME="gazeta-contratos", STORE="contratos", CFG="config";
 function openDB(){
   return new Promise((res,rej)=>{
-    const r = indexedDB.open(DB_NAME,1);
-    r.onupgradeneeded = ()=>{ r.result.createObjectStore(STORE,{keyPath:"cnpj"}); };
+    const r = indexedDB.open(DB_NAME,2);
+    r.onupgradeneeded = ()=>{
+      const db=r.result;
+      if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:"cnpj"});
+      if(!db.objectStoreNames.contains(CFG)) db.createObjectStore(CFG,{keyPath:"key"});
+    };
     r.onsuccess = ()=>res(r.result);
     r.onerror = ()=>rej(r.error);
   });
@@ -378,6 +392,40 @@ async function dbDel(cnpj){
     rq.onsuccess=()=>res(true); rq.onerror=()=>rej(rq.error);
   });
 }
+async function dbGetCfg(key){
+  const db=await openDB();
+  return new Promise((res)=>{
+    const rq=db.transaction(CFG).objectStore(CFG).get(key);
+    rq.onsuccess=()=>res(rq.result?rq.result.value:null); rq.onerror=()=>res(null);
+  });
+}
+async function dbPutCfg(key,value){
+  const db=await openDB();
+  return new Promise((res,rej)=>{
+    const rq=db.transaction(CFG,"readwrite").objectStore(CFG).put({key,value});
+    rq.onsuccess=()=>res(true); rq.onerror=()=>rej(rq.error);
+  });
+}
+
+/* Texto fixo padrão da devolução (interna ao setor) */
+const EMAIL_PADRAO = {
+  remetente: "",
+  assunto: "Nota Fiscal nº {numero} — devolvida por falta de contrato ({empresa})",
+  corpo:
+"Prezado(a),\n\n"+
+"Segue para devolução a nota fiscal nº {numero}, no valor de {valor}, do fornecedor {fornecedor} (CNPJ {cnpj}), referente à empresa {empresa}, por NÃO possuir contrato vinculado.\n\n"+
+"A nota fiscal segue em anexo. Favor providenciar a regularização do contrato para prosseguirmos com o pagamento.\n\n"+
+"Atenciosamente,\n{remetente}"
+};
+function aplicarTemplate(str, n, remetente){
+  return (str||"")
+    .replace(/\{numero\}/g, n.numeroNota||"")
+    .replace(/\{valor\}/g, fmtBRL(n.valor))
+    .replace(/\{fornecedor\}/g, n.nomeFornecedor||"")
+    .replace(/\{empresa\}/g, n.tomador||"")
+    .replace(/\{cnpj\}/g, n.cnpj?fmtCNPJ(n.cnpj):"")
+    .replace(/\{remetente\}/g, remetente||"");
+}
 
 /* ============================ App ============================ */
 function App(){
@@ -389,11 +437,35 @@ function App(){
   const [filtro,setFiltro] = useState("todas");
   const [busy,setBusy] = useState(false);
   const [toast,setToast] = useState("");
+  const [emailCfg,setEmailCfg] = useState(EMAIL_PADRAO);
+  const [usuarios,setUsuarios] = useState([]);   // usuários internos (nome + e-mail)
+  const [picker,setPicker] = useState(null);      // nota em devolução (abre o seletor)
 
   const reload = useCallback(async()=>{ setRegistry(await dbAll()); },[]);
-  useEffect(()=>{ reload(); },[reload]);
+  useEffect(()=>{ reload(); (async()=>{
+    const c=await dbGetCfg("email"); if(c) setEmailCfg({...EMAIL_PADRAO, ...c});
+    const u=await dbGetCfg("usuarios"); if(Array.isArray(u)) setUsuarios(u);
+  })(); },[reload]);
 
   function flash(msg){ setToast(msg); setTimeout(()=>setToast(""),2600); }
+
+  async function saveEmailCfg(cfg){ await dbPutCfg("email", cfg); setEmailCfg(cfg); flash("Texto de devolução salvo"); }
+  async function saveUsuarios(arr){ await dbPutCfg("usuarios", arr); setUsuarios(arr); }
+
+  // abre o seletor de usuário; o envio de fato é no enviarDevolucao
+  function devolver(n){ setPicker(n); }
+
+  function enviarDevolucao(n, email, nomeUsuario){
+    if(!email){ flash("Informe um e-mail"); return; }
+    const assunto = aplicarTemplate(emailCfg.assunto, n, emailCfg.remetente);
+    const corpo = aplicarTemplate(emailCfg.corpo, n, emailCfg.remetente);
+    if(n._file){
+      const a=document.createElement("a"); a.href=URL.createObjectURL(n._file); a.download=n.arquivo||"nota.pdf"; a.click();
+    }
+    window.location.href = "mailto:"+encodeURIComponent(email)+"?subject="+encodeURIComponent(assunto)+"&body="+encodeURIComponent(corpo);
+    setPicker(null);
+    flash("Devolução aberta para "+(nomeUsuario||email)+(n._file?" — anexe a NF baixada":""));
+  }
 
   // índices por CNPJ (forte) e por razão social normalizada; exceção é separada do contrato
   const regByCnpj = {}, regByName = {}, excByCnpj = {}, excByName = {};
@@ -494,7 +566,7 @@ function App(){
         <div className="inner">
           <div className="mark">GC</div>
           <div>
-            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.1</span></h1>
+            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.3</span></h1>
             <p>Notas fiscais acima do limite que estão sem contrato</p>
           </div>
         </div>
@@ -514,23 +586,50 @@ function App(){
             lote={lote} limite={limite} setLimite={setLimite}
             filtro={filtro} setFiltro={setFiltro} busy={busy}
             onNotas={onNotas} onContratos={onContratos}
-            setValorManual={setValorManual} salvarNoCadastro={salvarNoCadastro} marcarExcecao={marcarExcecao}
+            setValorManual={setValorManual} salvarNoCadastro={salvarNoCadastro} marcarExcecao={marcarExcecao} devolver={devolver}
             regByCnpj={regByCnpj} regByName={regByName} excByCnpj={excByCnpj} excByName={excByName}
             exportarCSV={exportarCSV} limparLeva={limparLeva}
           />
         )}
 
         {tab==="cad" && (
-          <Cadastro registry={registry} reload={reload} flash={flash} />
+          <Cadastro registry={registry} reload={reload} flash={flash} emailCfg={emailCfg} saveEmailCfg={saveEmailCfg} usuarios={usuarios} saveUsuarios={saveUsuarios} />
         )}
       </div>
 
+      {picker && <DevolverModal nota={picker} usuarios={usuarios} onSend={enviarDevolucao} onClose={()=>setPicker(null)} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }
 
 /* ---------------------- Conferência ---------------------- */
+function DevolverModal({nota,usuarios,onSend,onClose}){
+  const [adhoc,setAdhoc]=useState("");
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <h3>Devolver nota nº {nota.numeroNota||"—"}</h3>
+        <p className="msub">{nota.nomeFornecedor} · {fmtBRL(nota.valor)}{nota.tomador?" · "+nota.tomador:""} — escolha o usuário que vai receber:</p>
+        {usuarios.length===0 && <p className="footnote" style={{marginTop:0}}>Nenhum usuário cadastrado. Cadastre em "Cadastro → Usuários" ou digite um e-mail abaixo.</p>}
+        {usuarios.map((u,i)=>(
+          <button className="userbtn" key={i} onClick={()=>onSend(nota,u.email,u.nome)}>
+            <span className="un">{u.nome||u.email}</span><span className="ue">{u.email}</span>
+          </button>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:12}}>
+          <input value={adhoc} onChange={e=>setAdhoc(e.target.value)} placeholder="ou digite um e-mail avulso"
+            style={{flex:1,border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit"}} />
+          <button className="btn gold" onClick={()=>adhoc.trim()&&onSend(nota,adhoc.trim(),"")}>Devolver</button>
+        </div>
+        <div style={{textAlign:"right",marginTop:10}}>
+          <button className="btn ghost mini" onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DropZone({title,hint,count,onFiles,accept}){
   const ref=useRef(); const [over,setOver]=useState(false);
   return (
@@ -550,7 +649,7 @@ function DropZone({title,hint,count,onFiles,accept}){
 
 function Conferencia(props){
   const {notas,shown,missing,excecoes,somaMiss,lote,limite,setLimite,filtro,setFiltro,busy,
-    onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
+    onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,devolver,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
 
   return (
     <div>
@@ -633,7 +732,10 @@ function Conferencia(props){
                         {st.code==="ok" && temNoLote && noCad &&
                           <button className="btn link" onClick={()=>salvarNoCadastro(n)}>Salvar no cadastro</button>}
                         {st.code==="miss" &&
-                          <button className="btn link" onClick={()=>marcarExcecao(n)}>Marcar exceção</button>}
+                          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                            <button className="btn gold mini" onClick={()=>devolver(n)}>✉ Devolver</button>
+                            <button className="btn link" onClick={()=>marcarExcecao(n)}>Marcar exceção</button>
+                          </div>}
                       </td>
                     </tr>
                   );
@@ -655,12 +757,15 @@ function Conferencia(props){
 }
 
 /* ---------------------- Cadastro ---------------------- */
-function Cadastro({registry,reload,flash}){
+function Cadastro({registry,reload,flash,emailCfg,saveEmailCfg,usuarios,saveUsuarios}){
   const [cnpj,setCnpj]=useState(""); const [razao,setRazao]=useState("");
   const [vig,setVig]=useState(""); const [obs,setObs]=useState("");
   const [file,setFile]=useState(null); const fileRef=useRef();
   const [exc,setExc]=useState(false); const [motivo,setMotivo]=useState("");
   const [q,setQ]=useState("");
+  const [cfg,setCfg]=useState(emailCfg);
+  useEffect(()=>{ setCfg(emailCfg); },[emailCfg]);
+  const [uNome,setUNome]=useState(""); const [uEmail,setUEmail]=useState("");
 
   async function add(){
     const d=onlyDigits(cnpj);
@@ -670,8 +775,14 @@ function Cadastro({registry,reload,flash}){
       vigencia:vig, obs:obs, excecao:exc, motivoExcecao:(exc?(motivo.trim()||"Não exige contrato"):""), criadoEm:Date.now()});
     setCnpj("");setRazao("");setVig("");setObs("");setFile(null);setExc(false);setMotivo("");
     if(fileRef.current) fileRef.current.value="";
-    await reload(); flash(exc?"Fornecedor cadastrado como exceção":"Contrato cadastrado");
+    await reload(); flash(exc?"Fornecedor cadastrado como exceção":"Fornecedor cadastrado");
   }
+  function addUser(){
+    const em=uEmail.trim(); if(!em||!/@/.test(em)){ flash("Informe um e-mail válido"); return; }
+    if(usuarios.some(u=>u.email.toLowerCase()===em.toLowerCase())){ flash("Usuário já cadastrado"); return; }
+    saveUsuarios([...usuarios, {nome:uNome.trim(), email:em}]); setUNome(""); setUEmail(""); flash("Usuário cadastrado");
+  }
+  function delUser(em){ saveUsuarios(usuarios.filter(u=>u.email!==em)); }
   async function toggleExc(c){
     await dbPut({...c, excecao:!c.excecao, motivoExcecao:(!c.excecao?(c.motivoExcecao||"Não exige contrato"):"")});
     await reload(); flash(!c.excecao?"Marcado como exceção":"Exceção removida");
@@ -739,6 +850,44 @@ function Cadastro({registry,reload,flash}){
               <button className="btn danger mini" onClick={()=>remove(c)}>Remover</button>
             </div>
           ))}
+      </div>
+
+      <div className="card">
+        <h2>Usuários (para devolução) <span className="hint">{usuarios.length} cadastrado(s) — aparecem na lista ao clicar ✉ Devolver</span></h2>
+        <div className="controls">
+          <div className="field"><label>Nome</label>
+            <input value={uNome} onChange={e=>setUNome(e.target.value)} placeholder="ex.: Maria — Compras" style={{width:220}} /></div>
+          <div className="field" style={{flex:1,minWidth:240}}><label>E-mail interno</label>
+            <input value={uEmail} onChange={e=>setUEmail(e.target.value)} placeholder="usuario@redegazeta.com.br" style={{width:"100%"}}
+              onKeyDown={e=>e.key==="Enter"&&addUser()} /></div>
+          <button className="btn primary" onClick={addUser}>Adicionar</button>
+        </div>
+        {usuarios.length>0 &&
+          <div style={{marginTop:10}}>
+            {usuarios.map((u,i)=>(
+              <div className="reg-row" key={i}>
+                <div className="reg-main"><div className="rn">{u.nome||"(sem nome)"}</div><div className="rc">✉ {u.email}</div></div>
+                <button className="btn danger mini" onClick={()=>delUser(u.email)}>Remover</button>
+              </div>
+            ))}
+          </div>}
+      </div>
+
+      <div className="card">
+        <h2>Texto fixo da devolução <span className="hint">usado no botão ✉ Devolver — placeholders: {"{numero} {valor} {fornecedor} {empresa} {cnpj} {remetente}"}</span></h2>
+        <div className="controls">
+          <div className="field"><label>Seu nome / assinatura (remetente)</label>
+            <input value={cfg.remetente||""} onChange={e=>setCfg({...cfg,remetente:e.target.value})} placeholder="ex.: Fábio — Controladoria" style={{width:260}} /></div>
+          <div className="field" style={{flex:1,minWidth:260}}><label>Assunto</label>
+            <input value={cfg.assunto||""} onChange={e=>setCfg({...cfg,assunto:e.target.value})} style={{width:"100%"}} /></div>
+        </div>
+        <div className="field" style={{marginTop:4}}><label>Corpo do e-mail</label>
+          <textarea value={cfg.corpo||""} onChange={e=>setCfg({...cfg,corpo:e.target.value})} rows={7} style={{width:"100%",resize:"vertical"}} /></div>
+        <div style={{marginTop:8,display:"flex",gap:8,alignItems:"center"}}>
+          <button className="btn primary" onClick={()=>saveEmailCfg(cfg)}>Salvar texto</button>
+          <button className="btn ghost mini" onClick={()=>setCfg(EMAIL_PADRAO)}>Restaurar padrão</button>
+          <span className="footnote" style={{margin:0}}>A NF não vai anexada automática — ela é baixada pra você arrastar no e-mail.</span>
+        </div>
       </div>
     </div>
   );
