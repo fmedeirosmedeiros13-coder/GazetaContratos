@@ -1,5 +1,5 @@
 /* GazetaContratos — service worker */
-const CACHE = "gazeta-contratos-v1.6";
+const CACHE = "gazeta-contratos-v1.6.1";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -24,7 +24,7 @@ self.addEventListener("fetch", (e) => {
   if (isHTML) {
     // Network-first: sempre tenta a versão mais nova; cai no cache offline
     e.respondWith(
-      fetch(req).then((res) => {
+      fetch(req, {cache:"no-store"}).then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
         return res;
@@ -36,7 +36,7 @@ self.addEventListener("fetch", (e) => {
   // Demais recursos (CDN, ícones): cache-first com atualização em segundo plano
   e.respondWith(
     caches.match(req).then((cached) => {
-      const network = fetch(req).then((res) => {
+      const network = fetch(req, {cache:"no-store"}).then((res) => {
         if (res && (res.ok || res.type === "opaque")) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
