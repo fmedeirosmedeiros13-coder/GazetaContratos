@@ -261,7 +261,9 @@ function parseDateBR(s){ const m=(s||"").match(/(\d{2})[./](\d{2})[./](\d{4})/);
 function diasPrazo(emissao, vencimento){
   const a=parseDateBR(emissao), b=parseDateBR(vencimento);
   if(!a||!b) return null;
-  return Math.round((b-a)/86400000);
+  const d=Math.round((b-a)/86400000);
+  if(d < -90 || d > 366) return null;   // fora da faixa plausível = data lida errada, não conta
+  return d;
 }
 /* Política de pagamento Rede Gazeta: ideal >= 45, mínimo >= 30 */
 function politica(dias){
@@ -498,7 +500,11 @@ const OCR_PROMPT =
 '"vencimento": data de vencimento no formato dd/mm/aaaa (procure um carimbo/quadro com o campo VENCIMENTO ou VENCI-), '+
 '"descricao": discriminação/descrição resumida em até 140 caracteres, '+
 '"empresa": razão social do TOMADOR/destinatário/sacado, '+
-'"tipo": um de "NF-e", "NFS-e", "Recibo" ou "Boleto"}. Se um campo não existir, use null.';
+'"tipo": um de "NF-e", "NFS-e", "Recibo" ou "Boleto"}. Se um campo não existir, use null. '+
+"IMPORTANTE — se o documento for um BOLETO bancário (tem ficha de compensação, cedente/beneficiário, sacado, nosso número ou linha digitável): "+
+"defina tipo = \"Boleto\"; fornecedor = razão social do BENEFICIÁRIO/CEDENTE; cnpj = CNPJ do beneficiário; "+
+"empresa = razão social do SACADO/PAGADOR; vencimento = a data de VENCIMENTO do boleto (dd/mm/aaaa); "+
+"valor = o \"Valor do Documento\"; numero = o \"Nosso Número\" ou número do documento; descricao = o que estiver como demonstrativo/histórico.";
 
 function fileToB64(file){
   return new Promise((res,rej)=>{
@@ -755,7 +761,7 @@ function App(){
     flash(arr.length+" nota(s) lida(s)");
     // híbrido: OCR automático só nas problemáticas (ilegível ou sem valor)
     if(ocrCfg.url){
-      const probs = arr.filter(a=>a._file && (!a.legivel || a.valor==null));
+      const probs = arr.filter(a=>a._file && (!a.legivel || a.valor==null || a.tipo==="Boleto"));
       if(probs.length) runOcr(probs);
     }
   }
@@ -821,7 +827,7 @@ function App(){
         <div className="inner">
           <div className="mark">GC</div>
           <div>
-            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.7</span></h1>
+            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.7.2</span></h1>
             <p>Notas fiscais acima do limite que estão sem contrato</p>
           </div>
         </div>
