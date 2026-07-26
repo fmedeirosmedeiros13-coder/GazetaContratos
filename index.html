@@ -266,10 +266,18 @@ function parseValor(t){
 }
 
 /* ------- Razões sociais na ordem do documento (prestador vem primeiro) ------- */
+function limpaNome(s){
+  // corta no primeiro rótulo de outro campo que tenha grudado na mesma linha
+  s = s.split(/\s+(?:E-?mai?l|Endere[çc]o|Fone|Celular|Site|CPF\s*\/\s*CNPJ|CNPJ|CPF|Inscri[çc][ãa]o|Nome Fantasia|Munic[íi]pio|CEP|Regime|Simples Nacional|Telefone|Tel\.?)\b/i)[0];
+  return s.replace(/\s+/g," ").trim().slice(0,60);
+}
 function nomesDocumento(t){
-  const re = /(?:Nome\s*\/\s*Raz[ãa]o Social|Raz[ãa]o Social|NOME\s*\/\s*RAZ[ÃA]O SOCIAL|Nome\s*\/\s*Nome Empresarial)[:\s]*([A-Z0-9][^\n]{2,70})/gi;
+  const re = /(?:Nome\s*\/\s*Raz[ãa]o Social|Raz[ãa]o Social|NOME\s*\/\s*RAZ[ÃA]O SOCIAL|Nome\s*\/\s*Nome Empresarial)[:\s]*([A-Z0-9][^\n]{2,90})/gi;
   const out=[]; let m;
-  while((m=re.exec(t))){ const n=m[1].trim(); if(!/^(Inscri|CNPJ|CPF|E-?mail|Endere|Munic|Tel)/i.test(n)) out.push(n); }
+  while((m=re.exec(t))){
+    const n=limpaNome(m[1]);
+    if(n.length>=2 && !/^(Inscri|CNPJ|CPF|E-?mai?l|Endere|Munic|Tel)/i.test(n)) out.push(n);
+  }
   return out;
 }
 
@@ -427,6 +435,42 @@ function aplicarTemplate(str, n, remetente){
     .replace(/\{remetente\}/g, remetente||"");
 }
 
+/* ============================ OCR (Gemini via proxy) ============================ */
+const OCR_PROMPT =
+"Você recebe uma nota fiscal brasileira (NF-e de produto ou NFS-e de serviço) em PDF. "+
+"Extraia os dados do EMITENTE/PRESTADOR (quem EMITIU a nota), nunca do tomador. "+
+"Responda SOMENTE com um objeto JSON, sem texto extra nem markdown, com as chaves: "+
+'{"fornecedor": razão social do emitente/prestador, "cnpj": só os dígitos do CNPJ do emitente, '+
+'"valor": valor total do serviço ou da nota como número com ponto decimal, "numero": número da nota fiscal, '+
+'"descricao": discriminação/descrição do serviço ou produto resumida em até 140 caracteres, '+
+'"empresa": razão social do TOMADOR/destinatário}. Se um campo não existir, use null.';
+
+function fileToB64(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(String(r.result).split(",")[1]);
+    r.onerror=()=>rej(r.error);
+    r.readAsDataURL(file);
+  });
+}
+async function ocrNota(file, url){
+  const b64 = await fileToB64(file);
+  const body = {
+    contents:[{role:"user", parts:[
+      {inlineData:{mimeType:"application/pdf", data:b64}},
+      {text: OCR_PROMPT}
+    ]}],
+    generationConfig:{ temperature:0, responseMimeType:"application/json" }
+  };
+  const resp = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  if(resp.status===429) throw new Error("429");
+  if(!resp.ok) throw new Error("HTTP "+resp.status);
+  const data = await resp.json();
+  const txt = ((data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [])
+    .map(p=>p.text||"").join("").replace(/```json|```/g,"").trim();
+  return JSON.parse(txt);
+}
+
 /* ============================ App ============================ */
 function App(){
   const [tab,setTab] = useState("conf");
@@ -440,17 +484,56 @@ function App(){
   const [emailCfg,setEmailCfg] = useState(EMAIL_PADRAO);
   const [usuarios,setUsuarios] = useState([]);   // usuários internos (nome + e-mail)
   const [picker,setPicker] = useState(null);      // nota em devolução (abre o seletor)
+  const [ocrCfg,setOcrCfg] = useState({url:""});  // proxy Gemini
+  const [ocrRun,setOcrRun] = useState(null);      // progresso {done,total}
 
   const reload = useCallback(async()=>{ setRegistry(await dbAll()); },[]);
   useEffect(()=>{ reload(); (async()=>{
     const c=await dbGetCfg("email"); if(c) setEmailCfg({...EMAIL_PADRAO, ...c});
     const u=await dbGetCfg("usuarios"); if(Array.isArray(u)) setUsuarios(u);
+    const o=await dbGetCfg("ocr"); if(o) setOcrCfg({url:"", ...o});
   })(); },[reload]);
 
   function flash(msg){ setToast(msg); setTimeout(()=>setToast(""),2600); }
 
   async function saveEmailCfg(cfg){ await dbPutCfg("email", cfg); setEmailCfg(cfg); flash("Texto de devolução salvo"); }
   async function saveUsuarios(arr){ await dbPutCfg("usuarios", arr); setUsuarios(arr); }
+  async function saveOcrCfg(cfg){ await dbPutCfg("ocr", cfg); setOcrCfg(cfg); flash("OCR configurado"); }
+
+  function applyOcr(id, j){
+    setNotas(prev=>prev.map(x=>{
+      if(x.id!==id) return x;
+      const valor = (j.valor!=null && !isNaN(Number(j.valor))) ? Number(j.valor) : x.valor;
+      return {
+        ...x,
+        nomeFornecedor: j.fornecedor || x.nomeFornecedor,
+        cnpj: j.cnpj ? onlyDigits(j.cnpj) : x.cnpj,
+        valor,
+        numeroNota: j.numero || x.numeroNota,
+        descricao: j.descricao || x.descricao,
+        tomador: j.empresa || x.tomador,
+        _ocr:true, valorManual:false,
+        legivel: valor!==null,
+      };
+    }));
+  }
+  async function runOcr(list){
+    if(!ocrCfg.url){ flash("Configure a URL do proxy Gemini na aba Cadastro"); return; }
+    const alvos = list.filter(n=>n._file);
+    if(!alvos.length){ flash("Nada para reprocessar (arquivos não estão mais em memória — reenvie a leva)"); return; }
+    setOcrRun({done:0,total:alvos.length});
+    let done=0;
+    for(const n of alvos){
+      try{ const j = await ocrNota(n._file, ocrCfg.url); applyOcr(n.id, j); }
+      catch(e){
+        if(String(e.message).includes("429")){ flash("Limite do Gemini (429) — pausei. Tente de novo em instantes."); break; }
+        flash("Falha no OCR de "+(n.nomeFornecedor||n.arquivo)+": "+e.message);
+      }
+      done++; setOcrRun({done, total:alvos.length});
+      await new Promise(r=>setTimeout(r, 700)); // respeita o RPM do Gemini
+    }
+    setOcrRun(null); flash("OCR concluído em "+done+" nota(s)");
+  }
 
   // abre o seletor de usuário; o envio de fato é no enviarDevolucao
   function devolver(n){ setPicker(n); }
@@ -504,6 +587,11 @@ function App(){
     });
     setBusy(false);
     flash(arr.length+" nota(s) lida(s)");
+    // híbrido: OCR automático só nas problemáticas (ilegível ou sem valor)
+    if(ocrCfg.url){
+      const probs = arr.filter(a=>a._file && (!a.legivel || a.valor==null));
+      if(probs.length) runOcr(probs);
+    }
   }
   async function onContratos(files){
     setBusy(true);
@@ -566,7 +654,7 @@ function App(){
         <div className="inner">
           <div className="mark">GC</div>
           <div>
-            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.3</span></h1>
+            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.4</span></h1>
             <p>Notas fiscais acima do limite que estão sem contrato</p>
           </div>
         </div>
@@ -587,13 +675,14 @@ function App(){
             filtro={filtro} setFiltro={setFiltro} busy={busy}
             onNotas={onNotas} onContratos={onContratos}
             setValorManual={setValorManual} salvarNoCadastro={salvarNoCadastro} marcarExcecao={marcarExcecao} devolver={devolver}
+            runOcr={runOcr} ocrCfg={ocrCfg} ocrRun={ocrRun}
             regByCnpj={regByCnpj} regByName={regByName} excByCnpj={excByCnpj} excByName={excByName}
             exportarCSV={exportarCSV} limparLeva={limparLeva}
           />
         )}
 
         {tab==="cad" && (
-          <Cadastro registry={registry} reload={reload} flash={flash} emailCfg={emailCfg} saveEmailCfg={saveEmailCfg} usuarios={usuarios} saveUsuarios={saveUsuarios} />
+          <Cadastro registry={registry} reload={reload} flash={flash} emailCfg={emailCfg} saveEmailCfg={saveEmailCfg} usuarios={usuarios} saveUsuarios={saveUsuarios} ocrCfg={ocrCfg} saveOcrCfg={saveOcrCfg} />
         )}
       </div>
 
@@ -649,7 +738,7 @@ function DropZone({title,hint,count,onFiles,accept}){
 
 function Conferencia(props){
   const {notas,shown,missing,excecoes,somaMiss,lote,limite,setLimite,filtro,setFiltro,busy,
-    onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,devolver,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
+    onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,devolver,runOcr,ocrCfg,ocrRun,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
 
   return (
     <div>
@@ -693,6 +782,9 @@ function Conferencia(props){
             <button className={"chip"+(filtro==="miss"?" active":"")} onClick={()=>setFiltro("miss")}>Só falta contrato ({missing.length})</button>
             <button className={"chip"+(filtro==="exc"?" active":"")} onClick={()=>setFiltro("exc")}>Só exceções ({excecoes.length})</button>
             <div style={{flex:1}}></div>
+            {ocrRun && <span style={{alignSelf:"center",color:"var(--teal)",fontWeight:600,fontSize:12.5}}>OCR {ocrRun.done}/{ocrRun.total}…</span>}
+            {ocrCfg.url && !ocrRun &&
+              <button className="btn ghost mini" onClick={()=>{ if(confirm("Reprocessar TODAS as "+notas.length+" notas com OCR (Gemini)? São "+notas.length+" chamadas.")) runOcr(notas); }}>🔍 OCR em todas</button>}
             <button className="btn gold mini" onClick={exportarCSV}>Exportar CSV</button>
           </div>
 
@@ -726,16 +818,17 @@ function Conferencia(props){
                       </td>
                       <td>
                         <span className={"badge "+(st.tone)}>{st.label}</span>
-                        {st.code==="ileg" && <div className="footnote" style={{marginTop:4}}>Salve como PDF digital ou digite o valor</div>}
+                        {st.code==="ileg" && <div className="footnote" style={{marginTop:4}}>Salve como PDF digital, digite o valor{ocrCfg.url?" ou use 🔍 OCR":""}</div>}
                       </td>
                       <td>
-                        {st.code==="ok" && temNoLote && noCad &&
-                          <button className="btn link" onClick={()=>salvarNoCadastro(n)}>Salvar no cadastro</button>}
-                        {st.code==="miss" &&
-                          <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                            <button className="btn gold mini" onClick={()=>devolver(n)}>✉ Devolver</button>
-                            <button className="btn link" onClick={()=>marcarExcecao(n)}>Marcar exceção</button>
-                          </div>}
+                        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                          {st.code==="miss" && <button className="btn gold mini" onClick={()=>devolver(n)}>✉ Devolver</button>}
+                          {st.code==="miss" && <button className="btn link" onClick={()=>marcarExcecao(n)}>Marcar exceção</button>}
+                          {st.code==="ok" && temNoLote && noCad &&
+                            <button className="btn link" onClick={()=>salvarNoCadastro(n)}>Salvar no cadastro</button>}
+                          {ocrCfg.url && n._file && !ocrRun &&
+                            <button className="btn ghost mini" onClick={()=>runOcr([n])} title="Reler esta nota com OCR (Gemini)">{n._ocr?"🔍 OCR ✓":"🔍 OCR"}</button>}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -757,7 +850,7 @@ function Conferencia(props){
 }
 
 /* ---------------------- Cadastro ---------------------- */
-function Cadastro({registry,reload,flash,emailCfg,saveEmailCfg,usuarios,saveUsuarios}){
+function Cadastro({registry,reload,flash,emailCfg,saveEmailCfg,usuarios,saveUsuarios,ocrCfg,saveOcrCfg}){
   const [cnpj,setCnpj]=useState(""); const [razao,setRazao]=useState("");
   const [vig,setVig]=useState(""); const [obs,setObs]=useState("");
   const [file,setFile]=useState(null); const fileRef=useRef();
@@ -766,6 +859,8 @@ function Cadastro({registry,reload,flash,emailCfg,saveEmailCfg,usuarios,saveUsua
   const [cfg,setCfg]=useState(emailCfg);
   useEffect(()=>{ setCfg(emailCfg); },[emailCfg]);
   const [uNome,setUNome]=useState(""); const [uEmail,setUEmail]=useState("");
+  const [ocrUrl,setOcrUrl]=useState(ocrCfg.url||"");
+  useEffect(()=>{ setOcrUrl(ocrCfg.url||""); },[ocrCfg]);
 
   async function add(){
     const d=onlyDigits(cnpj);
@@ -850,6 +945,21 @@ function Cadastro({registry,reload,flash,emailCfg,saveEmailCfg,usuarios,saveUsua
               <button className="btn danger mini" onClick={()=>remove(c)}>Remover</button>
             </div>
           ))}
+      </div>
+
+      <div className="card">
+        <h2>OCR (Gemini) <span className="hint">reforço automático nas notas ilegíveis ou sem valor; também pelo botão 🔍 OCR</span></h2>
+        <div className="controls">
+          <div className="field" style={{flex:1,minWidth:280}}><label>URL do proxy Gemini</label>
+            <input value={ocrUrl} onChange={e=>setOcrUrl(e.target.value)} placeholder="https://seu-proxy.workers.dev/...:generateContent" style={{width:"100%"}} /></div>
+          <button className="btn primary" onClick={()=>saveOcrCfg({url:ocrUrl.trim()})}>Salvar</button>
+          {ocrCfg.url && <button className="btn ghost mini" onClick={()=>saveOcrCfg({url:""})}>Desligar</button>}
+        </div>
+        <div className="footnote">
+          Use o mesmo proxy do Checador. O app envia o PDF (<code>inlineData</code>, <code>application/pdf</code>) no corpo padrão do Gemini
+          (<code>{"{contents, generationConfig}"}</code>) e espera a resposta padrão <code>candidates[0].content.parts[].text</code> em JSON.
+          Sem URL, o sistema segue só na leitura de texto (grátis).
+        </div>
       </div>
 
       <div className="card">
