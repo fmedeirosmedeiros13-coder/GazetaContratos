@@ -221,8 +221,26 @@ function detectTipo(t){
   const u = t.toUpperCase();
   if(/NFS-?E|DANFSE|PRESTADOR DE SERVI|NOTA FISCAL.*SERVI/.test(u)) return "NFS-e";
   if(/DANFE|NOTA FISCAL ELETR/.test(u)) return "NF-e";
+  // boleto: sinais fortes (ficha de compensação, nosso número, linha digitável, cedente/beneficiário)
+  if(/FICHA DE COMPENSA[ÇC][ÃA]O|NOSSO N[ÚU]MERO|LINHA DIGIT[ÁA]VEL|C[ÓO]DIGO DE BARRAS|CEDENTE|BENEFICI[ÁA]RIO|LOCAL DE PAGAMENTO/.test(u)
+     || /\d{5}\.\d{5}\s+\d{5}\.\d{6}\s+\d{5}\.\d{6}\s+\d\s+\d{14}/.test(t)) return "Boleto";
   if(/\bRECIBO\b/.test(u)) return "Recibo";
   return "Documento";
+}
+
+/* ------- Data de emissão (fallback quando o nome do arquivo não tem data) ------- */
+function parseData(t){
+  const labels = [
+    /Data(?: e Hora)? da emiss[ãa]o da NFS-?e\s*(\d{2}\/\d{2}\/\d{4})/i,
+    /Data de Gera[çc][ãa]o da NFS-?e\s*(\d{2}\/\d{2}\/\d{4})/i,
+    /DATA DA EMISS[ÃA]O\s*(\d{2}\/\d{2}\/\d{4})/i,
+    /DATA DE EMISS[ÃA]O\s*(\d{2}\/\d{2}\/\d{4})/i,
+    /Data Fato Gerador\s*(\d{2}\/\d{2}\/\d{4})/i,
+    /Emitido em\s*(\d{2}\/\d{2}\/\d{4})/i,
+    /Vencimento\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i
+  ];
+  for(const re of labels){ const m=t.match(re); if(m) return m[1]; }
+  const g = t.match(/\b(\d{2}\/\d{2}\/\d{4})\b/); return g ? g[1] : "";
 }
 
 /* ------- CNPJ do prestador/emitente ------- */
@@ -253,7 +271,8 @@ function parseValor(t){
     "Vl\\.? do Servi[çc]o[^\\d]{0,20}?"+N,            // NFS-e Governo DF
     "Valor do Servi[çc]o[^\\d]{0,25}?"+N,             // DANFSe nacional
     "VALOR TOTAL DA NOTA(?!\\s*FISCAL)[^\\d]{0,40}?"+N, // DANFE (backup)
-    "VALOR TOTAL DO SERVI\\w+[^\\d]{0,40}?"+N
+    "VALOR TOTAL DO SERVI\\w+[^\\d]{0,40}?"+N,
+    "VALOR DO DOCUMENTO[^\\d]{0,20}?"+N               // boleto
   ];
   for(const lb of labels){ const v=tryPat(lb); if(v!==null) return v; }
   // recibo / doc simples: "VALOR 7.401,81", "R$ 7.401,81" ou "7.401,81 R$" — maior valor monetário
@@ -348,6 +367,7 @@ async function parseNota(file){
     arquivo:file.name,
     _file: file,
     ...meta,
+    data: meta.data || parseData(clean),
     nomeFornecedor: nome || meta.nomeFornecedor,
     tomador: empresaTomadora(nomes, tipo, isENotas, file.name),
     tipo, cnpj, valor,
@@ -437,13 +457,15 @@ function aplicarTemplate(str, n, remetente){
 
 /* ============================ OCR (Gemini via proxy) ============================ */
 const OCR_PROMPT =
-"Você recebe uma nota fiscal brasileira (NF-e de produto ou NFS-e de serviço) em PDF. "+
-"Extraia os dados do EMITENTE/PRESTADOR (quem EMITIU a nota), nunca do tomador. "+
+"Você recebe um documento fiscal brasileiro (NF-e de produto, NFS-e de serviço, recibo ou boleto bancário) em PDF. "+
+"Extraia os dados do EMITENTE/PRESTADOR (quem EMITIU o documento), nunca do tomador/sacado. "+
 "Responda SOMENTE com um objeto JSON, sem texto extra nem markdown, com as chaves: "+
 '{"fornecedor": razão social do emitente/prestador, "cnpj": só os dígitos do CNPJ do emitente, '+
-'"valor": valor total do serviço ou da nota como número com ponto decimal, "numero": número da nota fiscal, '+
-'"descricao": discriminação/descrição do serviço ou produto resumida em até 140 caracteres, '+
-'"empresa": razão social do TOMADOR/destinatário}. Se um campo não existir, use null.';
+'"valor": valor total do serviço/nota/documento como número com ponto decimal, "numero": número da nota/documento, '+
+'"data": data de emissão no formato dd/mm/aaaa, '+
+'"descricao": discriminação/descrição resumida em até 140 caracteres, '+
+'"empresa": razão social do TOMADOR/destinatário/sacado, '+
+'"tipo": um de "NF-e", "NFS-e", "Recibo" ou "Boleto"}. Se um campo não existir, use null.';
 
 function fileToB64(file){
   return new Promise((res,rej)=>{
@@ -486,6 +508,7 @@ function App(){
   const [picker,setPicker] = useState(null);      // nota em devolução (abre o seletor)
   const [ocrCfg,setOcrCfg] = useState({url:""});  // proxy Gemini
   const [ocrRun,setOcrRun] = useState(null);      // progresso {done,total}
+  const [readProg,setReadProg] = useState(null);  // progresso da leitura {done,total}
 
   const reload = useCallback(async()=>{ setRegistry(await dbAll()); },[]);
   useEffect(()=>{ reload(); (async()=>{
@@ -510,6 +533,8 @@ function App(){
         cnpj: j.cnpj ? onlyDigits(j.cnpj) : x.cnpj,
         valor,
         numeroNota: j.numero || x.numeroNota,
+        data: j.data || x.data,
+        tipo: j.tipo || x.tipo,
         descricao: j.descricao || x.descricao,
         tomador: j.empresa || x.tomador,
         _ocr:true, valorManual:false,
@@ -579,8 +604,11 @@ function App(){
 
   async function onNotas(files){
     setBusy(true);
-    const arr = [];
-    for(const f of files){ arr.push(await parseNota(f)); }
+    const arr = []; const total = files.length;
+    setReadProg({done:0, total});
+    let i=0;
+    for(const f of files){ arr.push(await parseNota(f)); i++; if(i%2===0||i===total) setReadProg({done:i, total}); }
+    setReadProg(null);
     setNotas(prev=>{
       const seen = new Set(prev.map(p=>p.id));
       return [...prev, ...arr.filter(a=>!seen.has(a.id))];
@@ -654,7 +682,7 @@ function App(){
         <div className="inner">
           <div className="mark">GC</div>
           <div>
-            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.4</span></h1>
+            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.5</span></h1>
             <p>Notas fiscais acima do limite que estão sem contrato</p>
           </div>
         </div>
@@ -675,7 +703,7 @@ function App(){
             filtro={filtro} setFiltro={setFiltro} busy={busy}
             onNotas={onNotas} onContratos={onContratos}
             setValorManual={setValorManual} salvarNoCadastro={salvarNoCadastro} marcarExcecao={marcarExcecao} devolver={devolver}
-            runOcr={runOcr} ocrCfg={ocrCfg} ocrRun={ocrRun}
+            runOcr={runOcr} ocrCfg={ocrCfg} ocrRun={ocrRun} readProg={readProg}
             regByCnpj={regByCnpj} regByName={regByName} excByCnpj={excByCnpj} excByName={excByName}
             exportarCSV={exportarCSV} limparLeva={limparLeva}
           />
@@ -738,7 +766,7 @@ function DropZone({title,hint,count,onFiles,accept}){
 
 function Conferencia(props){
   const {notas,shown,missing,excecoes,somaMiss,lote,limite,setLimite,filtro,setFiltro,busy,
-    onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,devolver,runOcr,ocrCfg,ocrRun,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
+    onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,devolver,runOcr,ocrCfg,ocrRun,readProg,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
 
   return (
     <div>
@@ -758,7 +786,17 @@ function Conferencia(props){
           </div>
           <div style={{flex:1}}></div>
           {notas.length>0 && <button className="btn ghost" onClick={limparLeva}>Limpar leva</button>}
-          {busy && <span style={{color:"var(--teal)",fontWeight:600}}>Lendo PDFs…</span>}
+          {busy && (()=>{ const pct = readProg&&readProg.total ? Math.round(readProg.done/readProg.total*100) : 0;
+            return (
+              <div style={{display:"flex",alignItems:"center",gap:10,minWidth:220}}>
+                <div style={{flex:1,height:8,background:"#e7ecf5",borderRadius:6,overflow:"hidden"}}>
+                  <div style={{width:pct+"%",height:"100%",background:"var(--teal)",transition:"width .2s"}}></div>
+                </div>
+                <span style={{color:"var(--teal)",fontWeight:700,fontVariantNumeric:"tabular-nums"}}>
+                  Lendo {pct}%{readProg?" ("+readProg.done+"/"+readProg.total+")":""}
+                </span>
+              </div>
+            ); })()}
         </div>
         <div className="footnote">
           O nome do arquivo dá fornecedor, código e nº da nota; o conteúdo dá CNPJ, valor e descrição.
