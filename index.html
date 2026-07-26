@@ -236,11 +236,38 @@ function parseData(t){
     /DATA DA EMISS[ÃA]O\s*(\d{2}\/\d{2}\/\d{4})/i,
     /DATA DE EMISS[ÃA]O\s*(\d{2}\/\d{2}\/\d{4})/i,
     /Data Fato Gerador\s*(\d{2}\/\d{2}\/\d{4})/i,
-    /Emitido em\s*(\d{2}\/\d{2}\/\d{4})/i,
-    /Vencimento\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i
+    /Emitido em\s*(\d{2}\/\d{2}\/\d{4})/i
   ];
   for(const re of labels){ const m=t.match(re); if(m) return m[1]; }
   const g = t.match(/\b(\d{2}\/\d{2}\/\d{4})\b/); return g ? g[1] : "";
+}
+
+/* ------- Vencimento (do carimbo / anotação / nome do arquivo) ------- */
+function parseVencimento(t, fname){
+  const D="(\\d{2}[./]\\d{2}[./]\\d{4})";
+  const pats=[
+    new RegExp("VENCI(?:MENTO|-|\\.)?\\s*:?\\s*"+D,"i"),   // carimbo "VENCI- 05.05.2026"
+    new RegExp("Data de Vencimento\\s*:?\\s*"+D,"i"),
+    new RegExp("\\bVENC\\.?\\s*:?\\s*"+D,"i"),
+    new RegExp("\\bV\\s*:\\s*"+D,"i")                       // anotação vermelha "V: 05.08.2026"
+  ];
+  for(const re of pats){ const m=t.match(re); if(m) return m[1].replace(/\./g,"/"); }
+  const mf=(fname||"").match(/^(\d{2})[-_.](\d{2})[-_.](\d{4})/);  // data no início do arquivo = vencimento
+  if(mf) return mf[1]+"/"+mf[2]+"/"+mf[3];
+  return "";
+}
+function parseDateBR(s){ const m=(s||"").match(/(\d{2})[./](\d{2})[./](\d{4})/); return m?new Date(+m[3], +m[2]-1, +m[1]):null; }
+function diasPrazo(emissao, vencimento){
+  const a=parseDateBR(emissao), b=parseDateBR(vencimento);
+  if(!a||!b) return null;
+  return Math.round((b-a)/86400000);
+}
+/* Política de pagamento Rede Gazeta: ideal >= 45, mínimo >= 30 */
+function politica(dias){
+  if(dias===null||dias===undefined) return {code:"nd", label:"—", tone:"low"};
+  if(dias>=45) return {code:"ideal", label:dias+"d · ideal", tone:"ok"};
+  if(dias>=30) return {code:"min", label:dias+"d · mínimo", tone:"warn"};
+  return {code:"fora", label:dias+"d · fora", tone:"miss"};
 }
 
 /* ------- CNPJ do prestador/emitente ------- */
@@ -362,12 +389,16 @@ async function parseNota(file){
   if(tipo==="NFS-e" && !isENotas) nome = nomes[0] || fnForn || (cnpj?fmtCNPJ(cnpj):"");
   else nome = fnForn || nomes[0] || (cnpj?fmtCNPJ(cnpj):"");
   const legivel = clean.trim().length > 200 && valor!==null;
+  const emissao = parseData(clean);
+  const vencimento = parseVencimento(clean, file.name);
   return {
     id: file.name+"|"+file.size,
     arquivo:file.name,
     _file: file,
     ...meta,
-    data: meta.data || parseData(clean),
+    data: emissao,
+    vencimento,
+    prazoDias: diasPrazo(emissao, vencimento),
     nomeFornecedor: nome || meta.nomeFornecedor,
     tomador: empresaTomadora(nomes, tipo, isENotas, file.name),
     tipo, cnpj, valor,
@@ -463,6 +494,7 @@ const OCR_PROMPT =
 '{"fornecedor": razão social do emitente/prestador, "cnpj": só os dígitos do CNPJ do emitente, '+
 '"valor": valor total do serviço/nota/documento como número com ponto decimal, "numero": número da nota/documento, '+
 '"data": data de emissão no formato dd/mm/aaaa, '+
+'"vencimento": data de vencimento no formato dd/mm/aaaa (procure um carimbo/quadro com o campo VENCIMENTO ou VENCI-), '+
 '"descricao": discriminação/descrição resumida em até 140 caracteres, '+
 '"empresa": razão social do TOMADOR/destinatário/sacado, '+
 '"tipo": um de "NF-e", "NFS-e", "Recibo" ou "Boleto"}. Se um campo não existir, use null.';
@@ -527,13 +559,17 @@ function App(){
     setNotas(prev=>prev.map(x=>{
       if(x.id!==id) return x;
       const valor = (j.valor!=null && !isNaN(Number(j.valor))) ? Number(j.valor) : x.valor;
+      const data = j.data || x.data;
+      const vencimento = j.vencimento || x.vencimento;
       return {
         ...x,
         nomeFornecedor: j.fornecedor || x.nomeFornecedor,
         cnpj: j.cnpj ? onlyDigits(j.cnpj) : x.cnpj,
         valor,
         numeroNota: j.numero || x.numeroNota,
-        data: j.data || x.data,
+        data,
+        vencimento,
+        prazoDias: diasPrazo(data, vencimento),
         tipo: j.tipo || x.tipo,
         descricao: j.descricao || x.descricao,
         tomador: j.empresa || x.tomador,
@@ -599,8 +635,9 @@ function App(){
   const enriched = notas.map(n=>({ ...n, _st:statusNota(n) }));
   const missing = enriched.filter(n=>n._st.code==="miss");
   const excecoes = enriched.filter(n=>n._st.code==="exc");
+  const foraPol = enriched.filter(n=>politica(n.prazoDias).code==="fora");
   const somaMiss = missing.reduce((s,n)=>s+(n.valor||0),0);
-  const shown = filtro==="miss" ? missing : (filtro==="exc" ? excecoes : enriched);
+  const shown = filtro==="miss" ? missing : (filtro==="exc" ? excecoes : (filtro==="fora" ? foraPol : enriched));
 
   async function onNotas(files){
     setBusy(true);
@@ -663,9 +700,10 @@ function App(){
   }
 
   function exportarCSV(){
-    const head = ["Data","Codigo","Fornecedor","Empresa","CNPJ","Tipo","Numero","Descricao","Valor","Status"];
+    const head = ["Emissao","Vencimento","PrazoDias","Politica","Codigo","Fornecedor","Empresa","CNPJ","Tipo","Numero","Descricao","Valor","Status"];
     const rows = enriched.map(n=>[
-      n.data, n.codFornecedor, n.nomeFornecedor, n.tomador, fmtCNPJ(n.cnpj), n.tipo, n.numeroNota,
+      n.data, n.vencimento, (n.prazoDias==null?"":n.prazoDias), politica(n.prazoDias).label.replace(/^\d+d · /,""),
+      n.codFornecedor, n.nomeFornecedor, n.tomador, fmtCNPJ(n.cnpj), n.tipo, n.numeroNota,
       (n.descricao||"").replace(/;/g,","), (n.valor!==null?n.valor.toFixed(2).replace(".",","):""), n._st.label
     ]);
     const csv = [head, ...rows].map(r=>r.map(c=>'"'+String(c==null?"":c).replace(/"/g,'""')+'"').join(";")).join("\n");
@@ -682,7 +720,7 @@ function App(){
         <div className="inner">
           <div className="mark">GC</div>
           <div>
-            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.5</span></h1>
+            <h1>GazetaContratos <span style={{fontSize:11,fontWeight:600,color:"var(--gold-soft)",border:"1px solid var(--gold)",borderRadius:20,padding:"1px 8px",verticalAlign:"middle",marginLeft:6}}>v1.6</span></h1>
             <p>Notas fiscais acima do limite que estão sem contrato</p>
           </div>
         </div>
@@ -698,7 +736,7 @@ function App(){
 
         {tab==="conf" && (
           <Conferencia
-            notas={enriched} shown={shown} missing={missing} excecoes={excecoes} somaMiss={somaMiss}
+            notas={enriched} shown={shown} missing={missing} excecoes={excecoes} foraPol={foraPol} somaMiss={somaMiss}
             lote={lote} limite={limite} setLimite={setLimite}
             filtro={filtro} setFiltro={setFiltro} busy={busy}
             onNotas={onNotas} onContratos={onContratos}
@@ -765,7 +803,7 @@ function DropZone({title,hint,count,onFiles,accept}){
 }
 
 function Conferencia(props){
-  const {notas,shown,missing,excecoes,somaMiss,lote,limite,setLimite,filtro,setFiltro,busy,
+  const {notas,shown,missing,excecoes,foraPol,somaMiss,lote,limite,setLimite,filtro,setFiltro,busy,
     onNotas,onContratos,setValorManual,salvarNoCadastro,marcarExcecao,devolver,runOcr,ocrCfg,ocrRun,readProg,regByCnpj,regByName,excByCnpj,excByName,exportarCSV,limparLeva} = props;
 
   return (
@@ -812,6 +850,9 @@ function Conferencia(props){
               <div className="v">{notas.filter(n=>n._st.code!=="low"&&n._st.code!=="ileg").length}</div></div>
             <div className="stat alert"><div className="k">Falta contrato</div><div className="v">{missing.length}</div></div>
             <div className="stat"><div className="k">Exceções</div><div className="v" style={{color:"var(--teal)"}}>{excecoes.length}</div></div>
+            <div className="stat" style={foraPol.length?{background:"var(--danger-bg)",borderColor:"var(--danger-line)"}:null}>
+              <div className="k">Fora da política (&lt;30d)</div>
+              <div className="v" style={{color:foraPol.length?"var(--danger)":"var(--navy)"}}>{foraPol.length}</div></div>
             <div className="stat alert"><div className="k">Soma sem contrato</div><div className="v" style={{fontSize:18}}>{fmtBRL(somaMiss)}</div></div>
           </div>
 
@@ -819,6 +860,7 @@ function Conferencia(props){
             <button className={"chip"+(filtro==="todas"?" active":"")} onClick={()=>setFiltro("todas")}>Todas ({notas.length})</button>
             <button className={"chip"+(filtro==="miss"?" active":"")} onClick={()=>setFiltro("miss")}>Só falta contrato ({missing.length})</button>
             <button className={"chip"+(filtro==="exc"?" active":"")} onClick={()=>setFiltro("exc")}>Só exceções ({excecoes.length})</button>
+            <button className={"chip"+(filtro==="fora"?" active":"")} onClick={()=>setFiltro("fora")}>Fora da política ({foraPol.length})</button>
             <div style={{flex:1}}></div>
             {ocrRun && <span style={{alignSelf:"center",color:"var(--teal)",fontWeight:600,fontSize:12.5}}>OCR {ocrRun.done}/{ocrRun.total}…</span>}
             {ocrCfg.url && !ocrRun &&
@@ -829,8 +871,8 @@ function Conferencia(props){
           <div className="tablewrap">
             <table>
               <thead><tr>
-                <th>Data</th><th>Fornecedor</th><th>Empresa</th><th>CNPJ</th><th>Tipo</th><th>Nº</th>
-                <th>Descrição</th><th className="num">Valor</th><th>Status</th><th></th>
+                <th>Emissão</th><th>Fornecedor</th><th>Empresa</th><th>CNPJ</th><th>Tipo</th><th>Nº</th>
+                <th>Descrição</th><th className="num">Valor</th><th>Prazo (política)</th><th>Status</th><th></th>
               </tr></thead>
               <tbody>
                 {shown.map(n=>{
@@ -853,6 +895,13 @@ function Conferencia(props){
                           ? <input className="val-edit" placeholder="digite" defaultValue=""
                               onBlur={e=>e.target.value&&setValorManual(n.id,e.target.value)} />
                           : <span>{fmtBRL(n.valor)}{n.valorManual&&<span title="valor digitado" style={{color:"var(--warn)"}}> ✎</span>}</span>}
+                      </td>
+                      <td>
+                        {(()=>{ const p=politica(n.prazoDias);
+                          return (<div style={{display:"flex",flexDirection:"column",gap:2,whiteSpace:"nowrap"}}>
+                            {n.vencimento && <span className="cod">venc {n.vencimento}</span>}
+                            <span className={"badge "+p.tone}>{p.label}</span>
+                          </div>); })()}
                       </td>
                       <td>
                         <span className={"badge "+(st.tone)}>{st.label}</span>
