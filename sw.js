@@ -1,5 +1,5 @@
 /* GazetaContratos — service worker */
-const CACHE = "gazeta-contratos-v1.6.1";
+const CACHE = "gazeta-contratos-v1.7";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
